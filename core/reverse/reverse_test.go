@@ -49,6 +49,12 @@ func TestReverseCloseNilDB(t *testing.T) {
 	}
 }
 
+func TestNewReverseNilConfig(t *testing.T) {
+	if got := NewReverse(nil); got != nil {
+		t.Fatal("NewReverse(nil) should return nil")
+	}
+}
+
 func TestNewReverseDisabled(t *testing.T) {
 	c := &Config{
 		DBFilePath: "",

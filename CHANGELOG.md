@@ -1,11 +1,17 @@
 # Unreleased  2026-09-01
 ## SUPPORT
 * 【1】WebUI 新增 MITM 被动扫描模式，支持配置监听地址、实时接收代理流量并通过任务控制停止监听。
-* 【1】AI 自动渗透引擎：新增 `core/aipentest`，覆盖黑板与事件流、Rule/LLM Worker、Multi-Agent、MCP、搜索、记忆、Prompt 模板、子任务规划、执行监控、登录态和工具调用限流等能力。
-* 【2】AI 渗透扫描工具统一接入当前 wscan 扫描链路：新增 `ScannerAdapter`，将 `wscan_scan`、`wscan_crawl`、`wscan_list_plugins`、`wscan_run_plugin`、`wscan_glob`、`wscan_write_plugin` 通过当前 WebUI 的 crawler、插件和 dispatcher 执行，不再依赖来源工程的扫描实现。
-* 【3】WebUI 初始化迁移后的 AI Engine、Dispatcher 与工具 Registry，Rule Worker 支持使用宿主注入的 wscan 工具执行器；AI 工具调用结果继续复用当前漏洞结构、漏洞库富化、SSE 事件和 scope 安全校验。
-* 【4】AI 渗透项目新增项目级配置能力，支持代理、认证头、Scope 白名单、爬虫参数、工具超时和插件数量限制，配置通过 `/api/ai-pentest/:id/config` 读取及保存。
-* 【5】清理 AI 迁移模块及 WebUI 中的旧产品名称、工具常量和 Prompt 文案，统一使用 wscan 命名；新增 ScannerAdapter 的越权拒绝和未配置适配器校验。
+* 【2】WebUI 新增反连平台管理能力，支持本地 HTTP/DNS/RMI/LDAP 平台和远程平台配置、启停、连通性测试、Payload 生成及回连事件查看。
+## SUPPORT
+* 【1】WebUI 新增 MITM 被动扫描模式，支持配置监听地址、实时接收代理流量并通过任务控制停止监听。
+* 【2】WebUI 新增反连平台管理能力，支持本地 HTTP/DNS/RMI/LDAP 平台和远程平台配置、启停、连通性测试、Payload 生成及回连事件查看。
+* 【3】反连平台支持保存 HTTP/DNS 均关闭的停用配置，并支持 DNS-only 模式启动；DNS-only 模式不会额外监听 HTTP 端口。
+* 【6】修复 WebUI 反连平台配置保存后重启丢失的问题：启动时恢复 `data/webui_reverse.json`，本地默认 Token 为 `xxxxx`、HTTP 监听端口为 `18888`，保存的配置可持久化恢复。
+* 【4】AI 自动渗透引擎：新增 `core/aipentest`，覆盖黑板与事件流、Rule/LLM Worker、Multi-Agent、MCP、搜索、记忆、Prompt 模板、子任务规划、执行监控、登录态和工具调用限流等能力。
+* 【5】AI 渗透扫描工具统一接入当前 wscan 扫描链路：新增 `ScannerAdapter`，将 `wscan_scan`、`wscan_crawl`、`wscan_list_plugins`、`wscan_run_plugin`、`wscan_glob`、`wscan_write_plugin` 通过当前 WebUI 的 crawler、插件和 dispatcher 执行，不再依赖来源工程的扫描实现。
+* 【6】WebUI 初始化迁移后的 AI Engine、Dispatcher 与工具 Registry，Rule Worker 支持使用宿主注入的 wscan 工具执行器；AI 工具调用结果继续复用当前漏洞结构、漏洞库富化、SSE 事件和 scope 安全校验。
+* 【7】AI 渗透项目新增项目级配置能力，支持代理、认证头、Scope 白名单、爬虫参数、工具超时和插件数量限制，配置通过 `/api/ai-pentest/:id/config` 读取及保存。
+* 【8】清理 AI 迁移模块及 WebUI 中的旧产品名称、工具常量和 Prompt 文案，统一使用 wscan 命名；新增 ScannerAdapter 的越权拒绝和未配置适配器校验。
 
 ## BUGFIX
 * 【1】修复 AI 渗透任务 LLM Worker 未实际进入迁移后的 LLM 对话引擎、仅执行旧版静态 OODA 流程的问题。现在项目由迁移后的 `aipentest.Engine`、`Dispatcher` 和 `LLMRunProject` 接管，支持多轮对话、工具调用和工具结果回传。

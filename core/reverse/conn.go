@@ -6,7 +6,9 @@ package reverse
 
 import (
 	"bufio"
+	"errors"
 	"net"
+	"sync"
 )
 
 type PeekConn struct {
@@ -33,6 +35,8 @@ type Listener struct {
 	net.Listener
 	reverse      *Reverse
 	peekConnChan chan *PeekConn
+	closed       chan struct{}
+	closeOnce    sync.Once
 }
 
 func NewListener(l net.Listener, reverse *Reverse) *Listener {
@@ -40,12 +44,21 @@ func NewListener(l net.Listener, reverse *Reverse) *Listener {
 		Listener:     l,
 		reverse:      reverse,
 		peekConnChan: make(chan *PeekConn),
+		closed:       make(chan struct{}),
 	}
 
 	go func(ln *Listener) {
 		for {
 			conn, err := ln.Listener.Accept()
 			if err != nil {
+				select {
+				case <-ln.closed:
+					return
+				default:
+				}
+				if ne, ok := err.(net.Error); !ok || !ne.Temporary() {
+					return
+				}
 				continue
 			}
 			go func(c net.Conn) {
@@ -61,7 +74,12 @@ func NewListener(l net.Listener, reverse *Reverse) *Listener {
 					ln.reverse.reverseRMIServer.Handle(peekableConn)
 				default:
 					// 其它如http/https服务
-					ln.peekConnChan <- peekableConn
+					select {
+					case ln.peekConnChan <- peekableConn:
+					case <-ln.closed:
+						_ = peekableConn.Close()
+						return
+					}
 				}
 			}(conn)
 		}
@@ -73,6 +91,12 @@ func (ln *Listener) Accept() (net.Conn, error) {
 	select {
 	case conn := <-ln.peekConnChan:
 		return conn, nil
+	case <-ln.closed:
+		return nil, errors.New("listener closed")
 	}
-	return nil, nil
+}
+
+func (ln *Listener) Close() error {
+	ln.closeOnce.Do(func() { close(ln.closed) })
+	return ln.Listener.Close()
 }

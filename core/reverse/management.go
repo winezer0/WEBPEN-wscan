@@ -44,9 +44,6 @@ func (c *Config) ValidateForManagement() error {
 		}
 		return nil
 	}
-	if !c.HTTPServerConfig.Enabled && !c.DNSServerConfig.Enabled {
-		return fmt.Errorf("enable HTTP or DNS server first")
-	}
 	if c.DBFilePath == "" {
 		return fmt.Errorf("db_file_path is required for local server")
 	}
@@ -54,6 +51,17 @@ func (c *Config) ValidateForManagement() error {
 		if _, _, err := net.SplitHostPort(net.JoinHostPort(c.HTTPServerConfig.ListenIP, c.HTTPServerConfig.ListenPort)); err != nil && c.HTTPServerConfig.ListenPort != "" {
 			return fmt.Errorf("invalid HTTP listen address: %v", err)
 		}
+	}
+	return nil
+}
+
+// ValidateForStart validates configuration and requires at least one local service.
+func (c *Config) ValidateForStart() error {
+	if err := c.ValidateForManagement(); err != nil {
+		return err
+	}
+	if !c.ClientConfig.RemoteServer && !c.HTTPServerConfig.Enabled && !c.DNSServerConfig.Enabled {
+		return fmt.Errorf("enable HTTP or DNS server first")
 	}
 	return nil
 }
@@ -122,7 +130,7 @@ func (r *Reverse) NewPayload(kind string) map[string]any {
 // ListEvents exposes persisted local events to the WebUI. Remote event retrieval
 // remains tied to active groups and is intentionally not guessed here.
 func (r *Reverse) ListEvents(eventType string, count int) ([]*Event, int, error) {
-	if r == nil || r.db == nil {
+	if r == nil || r.db == nil || r.db.DB == nil {
 		return []*Event{}, 0, fmt.Errorf("local event database is unavailable")
 	}
 	if count <= 0 || count > 200 {
@@ -133,7 +141,7 @@ func (r *Reverse) ListEvents(eventType string, count int) ([]*Event, int, error)
 }
 
 func (r *Reverse) EventStats() (*EventStats, error) {
-	if r == nil || r.db == nil {
+	if r == nil || r.db == nil || r.db.DB == nil {
 		return &EventStats{}, fmt.Errorf("local event database is unavailable")
 	}
 	return r.db.getEventStats(), nil

@@ -343,7 +343,39 @@ func StartWebUIServer(c *cli.Context) error {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	rv := reverse.NewReverse(cfg.Reverse)
+	if cfg.Reverse == nil {
+		cfg.Reverse = &reverse.Config{}
+	}
+	if cfg.Reverse.Token == "" {
+		cfg.Reverse.Token = "xxxxx"
+	}
+	if !cfg.Reverse.ClientConfig.RemoteServer && cfg.Reverse.HTTPServerConfig.ListenPort == "" {
+		cfg.Reverse.HTTPServerConfig.ListenPort = "18888"
+	}
+	persistedEnabled := false
+	if saved, err := loadReverseConfig(); err == nil {
+		if raw, ok := saved["config"]; ok {
+			b, marshalErr := json.Marshal(raw)
+			var savedCfg reverse.Config
+			if marshalErr == nil && json.Unmarshal(b, &savedCfg) == nil {
+				cfg.Reverse = &savedCfg
+			}
+		}
+		if enabled, ok := saved["enabled"].(bool); ok {
+			persistedEnabled = enabled
+		}
+	}
+	if cfg.Reverse != nil && !cfg.Reverse.ClientConfig.RemoteServer && cfg.Reverse.DBFilePath == "" {
+		cfg.Reverse.DBFilePath = filepath.Join(dataDir, "webui_reverse.db")
+	}
+	var rv *reverse.Reverse
+	if persistedEnabled {
+		var reverseErr error
+		rv, reverseErr = reverse.NewReverseWithError(cfg.Reverse)
+		if reverseErr != nil {
+			logger.Errorf("reverse platform disabled: %v", reverseErr)
+		}
+	}
 
 	srv := &Server{
 		cfg:            cfg,
@@ -467,12 +499,7 @@ func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			view := map[string]any{"config": cfg, "enabled": enabled, "status": cfg.ManagementStatus(enabled)}
-			if cfg.Token != "" {
-				view["tokenConfigured"] = true
-				safe := *cfg
-				safe.Token = ""
-				view["config"] = safe
-			}
+			view["tokenConfigured"] = cfg.Token != ""
 			writeJSON(w, map[string]any{"ok": true, "data": view})
 			return
 		}
@@ -484,6 +511,9 @@ func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
 			}
 			if cfg.Token == "" && s.cfg.Reverse != nil {
 				cfg.Token = s.cfg.Reverse.Token
+			}
+			if !cfg.ClientConfig.RemoteServer && cfg.DBFilePath == "" {
+				cfg.DBFilePath = filepath.Join(dataDir, "webui_reverse.db")
 			}
 			if err := cfg.ValidateForManagement(); err != nil {
 				writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
@@ -515,11 +545,15 @@ func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{"ok": false, "error": "reverse config is required"})
 			return
 		}
-		if err := s.cfg.Reverse.ValidateForManagement(); err != nil {
+		if err := s.cfg.Reverse.ValidateForStart(); err != nil {
 			writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
 			return
 		}
-		newRV := reverse.NewReverse(s.cfg.Reverse)
+		newRV, err := reverse.NewReverseWithError(s.cfg.Reverse)
+		if err != nil {
+			writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
 		if newRV == nil {
 			writeJSON(w, map[string]any{"ok": false, "error": "failed to start reverse platform"})
 			return
@@ -527,6 +561,14 @@ func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
 		s.reverseMu.Lock()
 		s.reverse, s.reverseEnabled = newRV, true
 		s.reverseMu.Unlock()
+		if err := saveReverseConfig(map[string]any{"config": *s.cfg.Reverse, "enabled": true}); err != nil {
+			_ = newRV.Close()
+			s.reverseMu.Lock()
+			s.reverse, s.reverseEnabled = nil, false
+			s.reverseMu.Unlock()
+			writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+			return
+		}
 		writeJSON(w, map[string]any{"ok": true})
 		return
 	case "/disable":
@@ -536,6 +578,12 @@ func (s *Server) handleReverse(w http.ResponseWriter, r *http.Request) {
 		s.reverseMu.Unlock()
 		if old != nil {
 			_ = old.Close()
+		}
+		if s.cfg.Reverse != nil {
+			if err := saveReverseConfig(map[string]any{"config": *s.cfg.Reverse, "enabled": false}); err != nil {
+				writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+				return
+			}
 		}
 		writeJSON(w, map[string]any{"ok": true})
 		return

@@ -20,12 +20,16 @@ type Reverse struct {
 	config                *Config
 	db                    *DB
 	reverseHTTPServer     *HTTPServer
+	reverseHTTPListener   net.Listener
 	reverseDNSServer      *DNSServer
 	reverseRMIServer      *RMIServer
 	reverseLdapServer     *LdapServer
 	groupUnitCallbackMap  sync.Map
 	internalGroupEventMap *sync.Map
 	groupToDelete         remoteFetchEventRequest
+	closeOnce             sync.Once
+	closed                chan struct{}
+	serveDone             chan struct{}
 }
 
 func (r *Reverse) Config() *Config {
@@ -63,30 +67,61 @@ func (r *Reverse) healthCheck(ctx context.Context) error {
 }
 
 func (r *Reverse) launchServer() error {
+	defer close(r.serveDone)
+	if r.config.DNSServerConfig.Enabled {
+		if dnsServer, _ := NewDNSServer(r.config, r.internalGroupEventMap, r.db); dnsServer != nil {
+			r.reverseDNSServer = dnsServer
+			go dnsServer.Start()
+		}
+	}
+	if !r.config.HTTPServerConfig.Enabled {
+		return nil
+	}
+	select {
+	case <-r.closed:
+		return nil
+	default:
+	}
+
 	r.reverseHTTPServer = NewHTTPServer(r.config, r.internalGroupEventMap, r.db)
 	r.reverseRMIServer = NewRMIServer(r.config, r.internalGroupEventMap, r.db)
 	r.reverseLdapServer = NewLdapServer(r.config, r.internalGroupEventMap, r.db)
 
-	if r.config.DNSServerConfig.Enabled {
-		if dnsServer, _ := NewDNSServer(r.config, r.internalGroupEventMap, r.db); dnsServer != nil {
-			go dnsServer.Start()
-		}
-	}
-
 	lis, err := net.Listen("tcp", r.config.HTTPServerConfig.GetAddr())
 	if err != nil {
-		logger.Fatal(err)
+		return err
 	}
+	r.reverseHTTPListener = lis
 	// Listener 会对HTTP/RMI/LDAP等协议进行复用同一个端口
 	r.reverseHTTPServer.Server.Serve(NewListener(lis, r))
 	return nil
 }
 
 func (r *Reverse) Close() error {
-	if r.db != nil {
-		return r.db.Close()
-	}
-	return nil
+	var closeErr error
+	r.closeOnce.Do(func() {
+		if r.closed != nil {
+			close(r.closed)
+		}
+		if r.reverseHTTPServer != nil && r.reverseHTTPServer.Server != nil {
+			_ = r.reverseHTTPServer.Close()
+		}
+		if r.reverseHTTPListener != nil {
+			_ = r.reverseHTTPListener.Close()
+			r.reverseHTTPListener = nil
+		}
+		if r.reverseDNSServer != nil && r.reverseDNSServer.Server != nil {
+			_ = r.reverseDNSServer.Shutdown()
+			r.reverseDNSServer = nil
+		}
+		if r.serveDone != nil {
+			<-r.serveDone
+		}
+		if r.db != nil && r.db.DB != nil {
+			closeErr = r.db.Close()
+		}
+	})
+	return closeErr
 }
 
 func (r *Reverse) prepareConfig() {
@@ -95,12 +130,52 @@ func (r *Reverse) prepareConfig() {
 
 }
 
+// NewReverseWithError creates a reverse platform without terminating the process on startup errors.
+func NewReverseWithError(config *Config) (*Reverse, error) {
+	if config == nil {
+		return nil, nil
+	}
+	if !config.ClientConfig.RemoteServer && !config.HTTPServerConfig.Enabled && !config.DNSServerConfig.Enabled {
+		return nil, nil
+	}
+	if config.ClientConfig.RemoteServer && config.Token == "" {
+		return nil, fmt.Errorf("please fill in the token of reverse")
+	}
+	if !config.ClientConfig.RemoteServer && config.DBFilePath == "" {
+		return nil, fmt.Errorf("if you want to run standalone reverse server, you must set db_file_path in config file, or data will lost if process restarts")
+	}
+	r := &Reverse{config: config, internalGroupEventMap: &sync.Map{}, closed: make(chan struct{}), serveDone: make(chan struct{})}
+	r.prepareConfig()
+	if !config.ClientConfig.RemoteServer {
+		db := &DB{}
+		if err := db.Open(config.DBFilePath); err != nil {
+			return nil, err
+		}
+		r.db = db
+		go func() {
+			if err := r.launchServer(); err != nil {
+				logger.Errorf("reverse platform stopped: %v", err)
+			}
+			_ = r.Close()
+		}()
+	} else {
+		go r.healthCheck(context.Background())
+	}
+	go r.gcExpiredGroup()
+	go r.gcExpiredEventMap()
+	go r.FetchEvent()
+	return r, nil
+}
+
 func NewReverse(config *Config) *Reverse {
+	if config == nil {
+		return nil
+	}
 	r := &Reverse{
 		config:                config,
 		internalGroupEventMap: &sync.Map{},
 	}
-	if !r.config.HTTPServerConfig.Enabled {
+	if !r.config.HTTPServerConfig.Enabled && !r.config.DNSServerConfig.Enabled {
 		if !r.config.ClientConfig.RemoteServer {
 			return nil
 		}

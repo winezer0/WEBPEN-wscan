@@ -40,7 +40,7 @@ func NewDNSServer(config *Config, internalGroupEventMap *sync.Map, db *DB) (*DNS
 func (ds *DNSServer) Start() {
 	logger.Info("starting reverse dns server")
 	if err := ds.ListenAndServe(); err != nil {
-		logger.Fatal(err)
+		logger.Errorf("reverse dns server stopped: %v", err)
 	}
 }
 
